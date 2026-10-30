@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cynbit-reference-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATABASE_URL=postgresql://cynbit_user:cynbit_secure_pass_2026@postgres:5432/cynbit_db?schema=public
+      - CORS_ORIGIN=https://www.cynbit.in
+      - RATE_LIMIT_WINDOW_MS=900000
+      - RATE_LIMIT_MAX_REQUESTS=5
+      - ADMIN_API_KEY=cynbit_prod_admin_secret_key_change_me
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: cynbit-postgres-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cynbit_user
+      POSTGRES_PASSWORD: cynbit_secure_pass_2026
+      POSTGRES_DB: cynbit_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cynbit_user -d cynbit_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
