@@ -1,0 +1,50 @@
+sequenceDiagram
+    autonumber
+    actor Client as Client / Web Browser
+    participant Gateway as Reverse Proxy / Gateway
+    participant ReqId as RequestId & Log Middleware
+    participant Security as Security & RateLimiter Middleware
+    participant Validator as Zod Validation Middleware
+    participant Controller as Inquiry Controller
+    participant Service as Inquiry Service
+    participant Repo as Inquiry Repository (Prisma)
+    participant DB as PostgreSQL Database
+    participant Queue as Async Job Queue
+    participant Email as Email Provider (Resend)
+
+    Client->>Gateway: POST /api/v1/inquiries (JSON Payload)
+    Gateway->>ReqId: Forward Request
+    Note over ReqId: Generate correlation UUID<br/>Attach X-Request-Id
+    ReqId->>Security: Pass to Security Pipeline
+    Note over Security: Helmet headers injected<br/>CORS checked<br/>Rate limit checked (5 req/15 min)
+    alt Rate Limit Exceeded
+        Security-->>Client: HTTP 429 Too Many Requests { code: "RATE_LIMIT_EXCEEDED" }
+    end
+
+    Security->>Validator: Pass to Schema Validator
+    Note over Validator: Zod strict schema check<br/>Trim, email format, max lengths
+    alt Invalid Schema / Malformed JSON
+        Validator-->>Client: HTTP 400 Bad Request { code: "VALIDATION_ERROR", details: [...] }
+    end
+
+    Validator->>Controller: Validated & Sanitized DTO
+    Controller->>Service: createInquiry(dto)
+    Service->>Repo: persistInquiry(data)
+    Repo->>DB: INSERT INTO "Inquiry" (...)
+    DB-->>Repo: Saved Record (id, status, createdAt)
+    Repo-->>Service: Inquiry Entity
+
+    Note over Service,Queue: Asynchronous Decoupling:<br/>Job enqueued outside HTTP path
+    Service-)Queue: Enqueue Notification Job (inquiryId, email, name)
+    Service-->>Controller: Created Inquiry DTO
+    Controller-->>Client: HTTP 201 Created { success: true, data: { inquiryId, status: "received" } }
+
+    critical Background Processing
+        Queue->>Email: Send Transactional Email (Resend API)
+        alt Email Success
+            Email-->>Queue: Message Delivered
+        else Email Timeout / Failure
+            Queue->>Queue: Retry with Exponential Backoff
+            Note over Queue: Push to Dead-Letter Queue if max retries fail
+        end
+    end
